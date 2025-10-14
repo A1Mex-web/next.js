@@ -1231,6 +1231,16 @@ export default async function build(
         )
       NextBuildContext.mappedPages = mappedPages
 
+      // Check if there are any user pages (non-reserved pages) in the pages router
+      const hasUserPagesRoutes = Object.keys(mappedPages).some(
+        (route) => !isReservedPage(route)
+      )
+
+      // If there are no user pages routes, treat this as app-dir-only
+      if (!appDirOnly && !hasUserPagesRoutes) {
+        appDirOnly = true
+      }
+
       let mappedAppPages: MappedPages | undefined
       let mappedAppLayouts: MappedPages | undefined
       let denormalizedAppPages: string[] | undefined
@@ -1445,11 +1455,6 @@ export default async function build(
         !!mappedAppPages?.[UNDERSCORE_GLOBAL_ERROR_ROUTE_ENTRY]
       const hasCustomErrorPage =
         mappedPages['/_error']?.startsWith(PAGES_DIR_ALIAS)
-
-      // Check if there are any user pages (non-reserved pages) in the pages router
-      const hasUserPagesRoutes = Object.keys(mappedPages).some(
-        (route) => !isReservedPage(route)
-      )
 
       if (hasPublicDir) {
         const hasPublicUnderScoreNextDir = existsSync(
@@ -2655,6 +2660,7 @@ export default async function build(
       // Since custom _app.js can wrap the 404 page we have to opt-out of static optimization if it has getInitialProps
       // Only export the static 404 when there is no /_error present
       const useStaticPages404 =
+        // !appDirOnly &&
         !customAppGetInitialProps && (!hasNonStaticErrorPage || hasPages404)
 
       if (invalidPages.size > 0) {
@@ -2803,6 +2809,7 @@ export default async function build(
 
       const hasPages500 = !appDirOnly && usedStaticStatusPages.includes('/500')
       const useDefaultStatic500 =
+        // !appDirOnly &&
         !hasPages500 && !hasNonStaticErrorPage && !customAppGetInitialProps
 
       const combinedPages = [...staticPages, ...ssgPages]
