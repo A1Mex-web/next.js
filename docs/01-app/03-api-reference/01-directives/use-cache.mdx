@@ -6,7 +6,6 @@ related:
   title: Related
   description: View related API references.
   links:
-    - app/api-reference/config/next-config-js/useCache
     - app/api-reference/config/next-config-js/cacheComponents
     - app/api-reference/config/next-config-js/cacheLife
     - app/api-reference/functions/cacheTag
@@ -18,15 +17,13 @@ The `use cache` directive allows you to mark a route, React component, or a func
 
 ## Usage
 
-`use cache` is currently an experimental feature. To enable it, add the [`useCache`](/docs/app/api-reference/config/next-config-js/useCache) option to your `next.config.ts` file:
+`use cache` is a Cache Components feature. To enable it, add the [`cacheComponents`](/docs/app/api-reference/config/next-config-js/cacheComponents) option to your `next.config.ts` file:
 
 ```ts filename="next.config.ts" switcher
 import type { NextConfig } from 'next'
 
 const nextConfig: NextConfig = {
-  experimental: {
-    useCache: true,
-  },
+  cacheComponents: true,
 }
 
 export default nextConfig
@@ -35,15 +32,11 @@ export default nextConfig
 ```js filename="next.config.js" switcher
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  experimental: {
-    useCache: true,
-  },
+  cacheComponents: true,
 }
 
 module.exports = nextConfig
 ```
-
-> **Good to know:** `use cache` can also be enabled with the [`cacheComponents`](/docs/app/api-reference/config/next-config-js/cacheComponents) option.
 
 Then, add `use cache` at the file, component, or function level:
 
@@ -370,6 +363,7 @@ Learn how to [configure caching](/docs/app/guides/self-hosting#caching-and-isr) 
 
 ## Version History
 
-| Version   | Changes                                                 |
-| --------- | ------------------------------------------------------- |
-| `v15.0.0` | `"use cache"` is introduced as an experimental feature. |
+| Version   | Changes                                                     |
+| --------- | ----------------------------------------------------------- |
+| `v16.0.0` | `"use cache"` is enabled with the Cache Components feature. |
+| `v15.0.0` | `"use cache"` is introduced as an experimental feature.     |

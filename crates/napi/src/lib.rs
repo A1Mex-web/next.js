@@ -30,11 +30,12 @@ DEALINGS IN THE SOFTWARE.
 //#![deny(clippy::all)]
 #![feature(arbitrary_self_types)]
 #![feature(arbitrary_self_types_pointers)]
+#![feature(iter_intersperse)]
 
 #[macro_use]
 extern crate napi_derive;
 
-use std::sync::{Arc, Once};
+use std::sync::Arc;
 
 use napi::bindgen_prelude::*;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -43,8 +44,10 @@ use swc_core::{
     base::{Compiler, TransformOutput},
     common::{FilePathMapping, SourceMap},
 };
+
 #[cfg(not(target_arch = "wasm32"))]
 pub mod css;
+pub mod lockfile;
 pub mod mdx;
 pub mod minify;
 #[cfg(not(target_arch = "wasm32"))]
@@ -153,20 +156,4 @@ pub fn complete_output(
     }
 
     Ok(js_output)
-}
-
-static REGISTER_ONCE: Once = Once::new();
-
-#[cfg(not(target_arch = "wasm32"))]
-fn register() {
-    REGISTER_ONCE.call_once(|| {
-        ::next_api::register();
-        next_core::register();
-        include!(concat!(env!("OUT_DIR"), "/register.rs"));
-    });
-}
-
-#[cfg(target_arch = "wasm32")]
-fn register() {
-    //noop
 }

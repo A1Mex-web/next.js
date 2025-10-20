@@ -446,12 +446,19 @@ export function generateValidatorFile(
             type === 'RouteHandlerConfig')
             ? `${type}<${JSON.stringify(route)}>`
             : type
+
+        // NOTE: we previously used `satisfies` here, but it's not supported by TypeScript 4.8 and below.
+        // If we ever raise the TS minimum version, we can switch back.
+
         return `// Validate ${filePath}
 {
+  type __IsExpected<Specific extends ${typeWithRoute}> = Specific
   const handler = {} as typeof import(${JSON.stringify(
     importPath.replace(/\.tsx?$/, '.js')
   )})
-  handler satisfies ${typeWithRoute}
+  type __Check = __IsExpected<typeof handler>
+  // @ts-ignore
+  type __Unused = __Check
 }`
       })
       .join('\n\n')
@@ -520,7 +527,6 @@ export function generateValidatorFile(
    * Validated at build-time by parsePagesSegmentConfig.
    */
   config?: {
-    amp?: boolean | 'hybrid' | string // necessary for JS
     maxDuration?: number
     runtime?: 'edge' | 'experimental-edge' | 'nodejs' | string // necessary unless config is exported as const
     regions?: string[]

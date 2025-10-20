@@ -4,7 +4,7 @@ use std::{
     sync::LazyLock,
 };
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 use regex::Regex;
 use rustc_hash::{FxHashMap, FxHashSet};
 use serde::{Deserialize, Serialize};
@@ -227,18 +227,18 @@ impl Pattern {
         longest_common_suffix(&strings)
     }
 
-    pub fn strip_prefix(&self, prefix: &str) -> Option<Self> {
+    pub fn strip_prefix(&self, prefix: &str) -> Result<Option<Self>> {
         if self.must_match(prefix) {
             let mut pat = self.clone();
-            pat.strip_prefix_len(prefix.len());
-            Some(pat)
+            pat.strip_prefix_len(prefix.len())?;
+            Ok(Some(pat))
         } else {
-            None
+            Ok(None)
         }
     }
 
-    pub fn strip_prefix_len(&mut self, len: usize) {
-        fn strip_prefix_internal(pattern: &mut Pattern, chars_to_strip: &mut usize) {
+    pub fn strip_prefix_len(&mut self, len: usize) -> Result<()> {
+        fn strip_prefix_internal(pattern: &mut Pattern, chars_to_strip: &mut usize) -> Result<()> {
             match pattern {
                 Pattern::Constant(c) => {
                     let c_len = c.len();
@@ -252,38 +252,45 @@ impl Pattern {
                 Pattern::Concatenation(list) => {
                     for c in list {
                         if *chars_to_strip > 0 {
-                            strip_prefix_internal(c, chars_to_strip);
+                            strip_prefix_internal(c, chars_to_strip)?;
                         }
                     }
                 }
                 Pattern::Alternatives(_) => {
-                    panic!("for strip_prefix a Pattern must be normalized");
+                    bail!("strip_prefix pattern must be normalized");
                 }
                 Pattern::Dynamic | Pattern::DynamicNoSlash => {
-                    panic!("strip_prefix prefix is too long");
+                    bail!("strip_prefix prefix is too long");
                 }
             }
+            Ok(())
         }
 
         match &mut *self {
             c @ Pattern::Constant(_) | c @ Pattern::Concatenation(_) => {
                 let mut len_local = len;
-                strip_prefix_internal(c, &mut len_local);
+                strip_prefix_internal(c, &mut len_local)?;
             }
             Pattern::Alternatives(list) => {
                 for c in list {
                     let mut len_local = len;
-                    strip_prefix_internal(c, &mut len_local);
+                    strip_prefix_internal(c, &mut len_local)?;
                 }
             }
             Pattern::Dynamic | Pattern::DynamicNoSlash => {
                 if len > 0 {
-                    panic!("strip_prefix prefix is too long");
+                    bail!(
+                        "strip_prefix prefix ({}) is too long: {}",
+                        len,
+                        self.describe_as_string()
+                    );
                 }
             }
         };
 
-        self.normalize()
+        self.normalize();
+
+        Ok(())
     }
 
     pub fn strip_suffix_len(&mut self, len: usize) {
@@ -812,10 +819,13 @@ impl Pattern {
 
     pub fn is_match(&self, value: &str) -> bool {
         if let Pattern::Alternatives(list) = self {
-            list.iter()
-                .any(|alt| alt.match_internal(value, None, false).is_match())
+            list.iter().any(|alt| {
+                alt.match_internal(value, None, InNodeModules::False, false)
+                    .is_match()
+            })
         } else {
-            self.match_internal(value, None, false).is_match()
+            self.match_internal(value, None, InNodeModules::False, false)
+                .is_match()
         }
     }
 
@@ -823,19 +833,24 @@ impl Pattern {
     /// pattern matching
     pub fn is_match_ignore_dynamic(&self, value: &str) -> bool {
         if let Pattern::Alternatives(list) = self {
-            list.iter()
-                .any(|alt| alt.match_internal(value, None, true).is_match())
+            list.iter().any(|alt| {
+                alt.match_internal(value, None, InNodeModules::False, true)
+                    .is_match()
+            })
         } else {
-            self.match_internal(value, None, true).is_match()
+            self.match_internal(value, None, InNodeModules::False, true)
+                .is_match()
         }
     }
 
     pub fn match_position(&self, value: &str) -> Option<usize> {
         if let Pattern::Alternatives(list) = self {
-            list.iter()
-                .position(|alt| alt.match_internal(value, None, false).is_match())
+            list.iter().position(|alt| {
+                alt.match_internal(value, None, InNodeModules::False, false)
+                    .is_match()
+            })
         } else {
-            self.match_internal(value, None, false)
+            self.match_internal(value, None, InNodeModules::False, false)
                 .is_match()
                 .then_some(0)
         }
@@ -843,39 +858,50 @@ impl Pattern {
 
     pub fn could_match_others(&self, value: &str) -> bool {
         if let Pattern::Alternatives(list) = self {
-            list.iter()
-                .any(|alt| alt.match_internal(value, None, false).could_match_others())
+            list.iter().any(|alt| {
+                alt.match_internal(value, None, InNodeModules::False, false)
+                    .could_match_others()
+            })
         } else {
-            self.match_internal(value, None, false).could_match_others()
+            self.match_internal(value, None, InNodeModules::False, false)
+                .could_match_others()
         }
     }
 
     /// Returns true if all matches of the pattern start with `value`.
     pub fn must_match(&self, value: &str) -> bool {
         if let Pattern::Alternatives(list) = self {
-            list.iter()
-                .all(|alt| alt.match_internal(value, None, false).could_match())
+            list.iter().all(|alt| {
+                alt.match_internal(value, None, InNodeModules::False, false)
+                    .could_match()
+            })
         } else {
-            self.match_internal(value, None, false).could_match()
+            self.match_internal(value, None, InNodeModules::False, false)
+                .could_match()
         }
     }
 
     /// Returns true the pattern could match something that starts with `value`.
     pub fn could_match(&self, value: &str) -> bool {
         if let Pattern::Alternatives(list) = self {
-            list.iter()
-                .any(|alt| alt.match_internal(value, None, false).could_match())
+            list.iter().any(|alt| {
+                alt.match_internal(value, None, InNodeModules::False, false)
+                    .could_match()
+            })
         } else {
-            self.match_internal(value, None, false).could_match()
+            self.match_internal(value, None, InNodeModules::False, false)
+                .could_match()
         }
     }
 
     pub fn could_match_position(&self, value: &str) -> Option<usize> {
         if let Pattern::Alternatives(list) = self {
-            list.iter()
-                .position(|alt| alt.match_internal(value, None, false).could_match())
+            list.iter().position(|alt| {
+                alt.match_internal(value, None, InNodeModules::False, false)
+                    .could_match()
+            })
         } else {
-            self.match_internal(value, None, false)
+            self.match_internal(value, None, InNodeModules::False, false)
                 .could_match()
                 .then_some(0)
         }
@@ -884,6 +910,7 @@ impl Pattern {
         &self,
         mut value: &'a str,
         mut any_offset: Option<usize>,
+        mut in_node_modules: InNodeModules,
         ignore_dynamic: bool,
     ) -> MatchResult<'a> {
         match self {
@@ -894,6 +921,7 @@ impl Pattern {
                             MatchResult::Consumed {
                                 remaining: &value[index + c.len()..],
                                 any_offset: None,
+                                in_node_modules: InNodeModules::check(c),
                             }
                         } else {
                             MatchResult::None
@@ -907,6 +935,7 @@ impl Pattern {
                     MatchResult::Consumed {
                         remaining: &value[c.len()..],
                         any_offset: None,
+                        in_node_modules: InNodeModules::check(c),
                     }
                 } else if c.starts_with(value) {
                     MatchResult::Partial
@@ -920,10 +949,15 @@ impl Pattern {
                 });
                 static FORBIDDEN_MATCH: LazyLock<Regex> =
                     LazyLock::new(|| Regex::new(r"\.d\.ts$|\.map$").unwrap());
-                if let Some(m) = FORBIDDEN.find(value) {
+                if in_node_modules == InNodeModules::FolderSlashMatched
+                    || (in_node_modules == InNodeModules::FolderMatched && value.starts_with('/'))
+                {
+                    MatchResult::None
+                } else if let Some(m) = FORBIDDEN.find(value) {
                     MatchResult::Consumed {
                         remaining: value,
                         any_offset: Some(m.start()),
+                        in_node_modules: InNodeModules::False,
                     }
                 } else if FORBIDDEN_MATCH.find(value).is_some() {
                     MatchResult::Partial
@@ -937,6 +971,7 @@ impl Pattern {
                     MatchResult::Consumed {
                         remaining: value,
                         any_offset: Some(match_length),
+                        in_node_modules: InNodeModules::False,
                     }
                 }
             }
@@ -945,21 +980,24 @@ impl Pattern {
             }
             Pattern::Concatenation(list) => {
                 for part in list {
-                    match part.match_internal(value, any_offset, ignore_dynamic) {
+                    match part.match_internal(value, any_offset, in_node_modules, ignore_dynamic) {
                         MatchResult::None => return MatchResult::None,
                         MatchResult::Partial => return MatchResult::Partial,
                         MatchResult::Consumed {
                             remaining: new_value,
                             any_offset: new_any_offset,
+                            in_node_modules: new_in_node_modules,
                         } => {
                             value = new_value;
                             any_offset = new_any_offset;
+                            in_node_modules = new_in_node_modules
                         }
                     }
                 }
                 MatchResult::Consumed {
                     remaining: value,
                     any_offset,
+                    in_node_modules,
                 }
             }
         }
@@ -971,6 +1009,7 @@ impl Pattern {
         &self,
         mut value: &'a str,
         mut any_offset: Option<usize>,
+        mut in_node_modules: InNodeModules,
         dynamics: &mut VecDeque<&'a str>,
     ) -> MatchResult<'a> {
         match self {
@@ -984,6 +1023,7 @@ impl Pattern {
                             MatchResult::Consumed {
                                 remaining: &value[index + c.len()..],
                                 any_offset: None,
+                                in_node_modules: InNodeModules::check(c),
                             }
                         } else {
                             MatchResult::None
@@ -997,6 +1037,7 @@ impl Pattern {
                     MatchResult::Consumed {
                         remaining: &value[c.len()..],
                         any_offset: None,
+                        in_node_modules: InNodeModules::check(c),
                     }
                 } else if c.starts_with(value) {
                     MatchResult::Partial
@@ -1010,10 +1051,15 @@ impl Pattern {
                 });
                 static FORBIDDEN_MATCH: LazyLock<Regex> =
                     LazyLock::new(|| Regex::new(r"\.d\.ts$|\.map$").unwrap());
-                if let Some(m) = FORBIDDEN.find(value) {
+                if in_node_modules == InNodeModules::FolderSlashMatched
+                    || (in_node_modules == InNodeModules::FolderMatched && value.starts_with('/'))
+                {
+                    MatchResult::None
+                } else if let Some(m) = FORBIDDEN.find(value) {
                     MatchResult::Consumed {
                         remaining: value,
                         any_offset: Some(m.start()),
+                        in_node_modules: InNodeModules::False,
                     }
                 } else if FORBIDDEN_MATCH.find(value).is_some() {
                     MatchResult::Partial
@@ -1025,6 +1071,7 @@ impl Pattern {
                     MatchResult::Consumed {
                         remaining: value,
                         any_offset: Some(match_length),
+                        in_node_modules: InNodeModules::False,
                     }
                 }
             }
@@ -1033,15 +1080,18 @@ impl Pattern {
             }
             Pattern::Concatenation(list) => {
                 for part in list {
-                    match part.match_collect_internal(value, any_offset, dynamics) {
+                    match part.match_collect_internal(value, any_offset, in_node_modules, dynamics)
+                    {
                         MatchResult::None => return MatchResult::None,
                         MatchResult::Partial => return MatchResult::Partial,
                         MatchResult::Consumed {
                             remaining: new_value,
                             any_offset: new_any_offset,
+                            in_node_modules: new_in_node_modules,
                         } => {
                             value = new_value;
                             any_offset = new_any_offset;
+                            in_node_modules = new_in_node_modules
                         }
                     }
                 }
@@ -1053,6 +1103,7 @@ impl Pattern {
                 MatchResult::Consumed {
                     remaining: value,
                     any_offset,
+                    in_node_modules,
                 }
             }
         }
@@ -1249,7 +1300,7 @@ impl Pattern {
 
         let mut dynamics = VecDeque::new();
         // This is definitely a match, because it matched above in `self.match_position(value)`
-        source.match_collect_internal(value, None, &mut dynamics);
+        source.match_collect_internal(value, None, InNodeModules::False, &mut dynamics);
 
         let mut result = "".to_string();
         match target {
@@ -1294,6 +1345,26 @@ impl Pattern {
 }
 
 #[derive(PartialEq, Debug)]
+enum InNodeModules {
+    False,
+    // Inside of a match ending in `node_modules`
+    FolderMatched,
+    // Inside of a match ending in `node_modules/`
+    FolderSlashMatched,
+}
+impl InNodeModules {
+    fn check(value: &str) -> Self {
+        if value.ends_with("node_modules/") {
+            InNodeModules::FolderSlashMatched
+        } else if value.ends_with("node_modules") {
+            InNodeModules::FolderMatched
+        } else {
+            InNodeModules::False
+        }
+    }
+}
+
+#[derive(PartialEq, Debug)]
 enum MatchResult<'a> {
     /// No match
     None,
@@ -1306,6 +1377,9 @@ enum MatchResult<'a> {
         /// Set when the pattern ends with a dynamic part. The dynamic part
         /// could match n bytes more of the string.
         any_offset: Option<usize>,
+        /// Set when the pattern ends with `node_modules` or `node_modules/` (and a following
+        /// Pattern::Dynamic would thus match all existing packages)
+        in_node_modules: InNodeModules,
     },
 }
 
@@ -1318,6 +1392,7 @@ impl MatchResult<'_> {
             MatchResult::Consumed {
                 remaining: rem,
                 any_offset,
+                in_node_modules: _,
             } => {
                 if let Some(offset) = any_offset {
                     *offset == rem.len()
@@ -1337,6 +1412,7 @@ impl MatchResult<'_> {
             MatchResult::Consumed {
                 remaining: rem,
                 any_offset,
+                in_node_modules: _,
             } => {
                 if let Some(offset) = any_offset {
                     *offset == rem.len()
@@ -1356,6 +1432,7 @@ impl MatchResult<'_> {
             MatchResult::Consumed {
                 remaining: rem,
                 any_offset,
+                in_node_modules: _,
             } => {
                 if let Some(offset) = any_offset {
                     *offset == rem.len()
@@ -1777,7 +1854,6 @@ pub async fn read_matches(
                                 prefix.truncate(len)
                             }
                             RawDirectoryEntry::Other => {}
-                            RawDirectoryEntry::Error => {}
                         }
                     }
                 }
@@ -1833,10 +1909,16 @@ fn split_last_segment(path: &str) -> (&str, &str) {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use rstest::*;
     use turbo_rcstr::{RcStr, rcstr};
+    use turbo_tasks_backend::{BackendOptions, TurboTasksBackend, noop_backing_storage};
+    use turbo_tasks_fs::{DiskFileSystem, FileSystem};
 
-    use super::{Pattern, longest_common_prefix, longest_common_suffix, split_last_segment};
+    use super::{
+        Pattern, longest_common_prefix, longest_common_suffix, read_matches, split_last_segment,
+    };
 
     #[test]
     fn longest_common_prefix_test() {
@@ -2089,7 +2171,7 @@ mod tests {
     #[test]
     fn strip_prefix() {
         fn strip(mut pat: Pattern, n: usize) -> Pattern {
-            pat.strip_prefix_len(n);
+            pat.strip_prefix_len(n).unwrap();
             pat
         }
 
@@ -2282,6 +2364,16 @@ mod tests {
         assert!(!pat.is_match("dir/file.d.ts.map"));
         assert!(!pat.is_match("dir/inner/file.d.ts.map"));
         assert!(pat.could_match("dir/inner/file.d.ts.map"));
+    }
+
+    #[rstest]
+    #[case::slash(Pattern::Concatenation(vec![Pattern::Constant(rcstr!("node_modules/")),Pattern::Dynamic]))]
+    #[case::nested(Pattern::Constant(rcstr!("node_modules")).or_any_nested_file())]
+    fn dynamic_match_node_modules(#[case] pat: Pattern) {
+        assert!(!pat.is_match("node_modules/package"));
+        assert!(!pat.could_match("node_modules/package"));
+        assert!(!pat.is_match("node_modules/package/index.js"));
+        assert!(!pat.could_match("node_modules/package/index.js"));
     }
 
     #[rstest]
@@ -2566,5 +2658,79 @@ mod tests {
         assert_eq!(split_last_segment("../a/"), ("..", "a"));
         assert_eq!(split_last_segment("../../a"), ("../..", "a"));
         assert_eq!(split_last_segment("../../a/"), ("../..", "a"));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_read_matches() {
+        let tt = turbo_tasks::TurboTasks::new(TurboTasksBackend::new(
+            BackendOptions::default(),
+            noop_backing_storage(),
+        ));
+        tt.run_once(async {
+            let root = DiskFileSystem::new(
+                rcstr!("test"),
+                Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("tests/pattern/read_matches")
+                    .to_str()
+                    .unwrap()
+                    .into(),
+            )
+            .root()
+            .owned()
+            .await?;
+
+            // node_modules shouldn't be matched by Dynamic here
+            assert_eq!(
+                vec!["index.js", "sub", "sub/", "sub/foo-a.js", "sub/foo-b.js"],
+                read_matches(
+                    root.clone(),
+                    rcstr!(""),
+                    false,
+                    Pattern::new(Pattern::Dynamic),
+                )
+                .await?
+                .into_iter()
+                .map(|m| m.name())
+                .collect::<Vec<_>>()
+            );
+
+            // basic dynamic file suffix
+            assert_eq!(
+                vec!["sub/foo-a.js", "sub/foo-b.js"],
+                read_matches(
+                    root.clone(),
+                    rcstr!(""),
+                    false,
+                    Pattern::new(Pattern::concat([
+                        Pattern::Constant(rcstr!("sub/foo")),
+                        Pattern::Dynamic,
+                    ])),
+                )
+                .await?
+                .into_iter()
+                .map(|m| m.name())
+                .collect::<Vec<_>>()
+            );
+
+            // read_matches "node_modules/<dynamic>" should not return anything inside. We never
+            // want to enumerate the list of packages here.
+            assert_eq!(
+                vec!["node_modules"] as Vec<&str>,
+                read_matches(
+                    root.clone(),
+                    rcstr!(""),
+                    false,
+                    Pattern::new(Pattern::Constant(rcstr!("node_modules")).or_any_nested_file()),
+                )
+                .await?
+                .into_iter()
+                .map(|m| m.name())
+                .collect::<Vec<_>>()
+            );
+
+            anyhow::Ok(())
+        })
+        .await
+        .unwrap();
     }
 }

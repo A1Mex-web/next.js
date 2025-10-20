@@ -13,7 +13,11 @@ import type RenderResult from './render-result'
 import type { FetchEventResult } from './web/types'
 import type { PrerenderManifest, RoutesManifest } from '../build'
 import type { PagesManifest } from '../build/webpack/plugins/pages-manifest-plugin'
-import type { NextParsedUrlQuery, NextUrlWithParsedQuery } from './request-meta'
+import type {
+  NextParsedUrlQuery,
+  NextUrlWithParsedQuery,
+  RequestMeta,
+} from './request-meta'
 import type { Params } from './request/params'
 import type { MiddlewareRouteMatch } from '../shared/lib/router/utils/middleware-route-matcher'
 import type { RouteMatch } from './route-matches/route-match'
@@ -27,7 +31,7 @@ import type { WaitUntil } from './after/builtin-request-context'
 import fs from 'fs'
 import { join, relative } from 'path'
 import { getRouteMatcher } from '../shared/lib/router/utils/route-matcher'
-import { addRequestMeta, getRequestMeta } from './request-meta'
+import { addRequestMeta, getRequestMeta, setRequestMeta } from './request-meta'
 import {
   PAGES_MANIFEST,
   BUILD_ID_FILE,
@@ -119,6 +123,7 @@ import {
   RouterServerContextSymbol,
   routerServerGlobal,
 } from './lib/router-utils/router-server-context'
+import { installGlobalBehaviors } from './node-environment-extensions/global-behaviors'
 
 export * from './base-server'
 
@@ -269,6 +274,8 @@ export default class NextNodeServer extends BaseServer<
     // Initialize super class
     super(options)
 
+    installGlobalBehaviors(this.nextConfig)
+
     const isDev = options.dev ?? false
     this.isDev = isDev
     this.sriEnabled = Boolean(options.conf.experimental?.sri?.algorithm)
@@ -327,7 +334,10 @@ export default class NextNodeServer extends BaseServer<
       interceptTestApis()
     }
 
-    this.middlewareManifestPath = join(this.serverDistDir, MIDDLEWARE_MANIFEST)
+    this.middlewareManifestPath = join(
+      /* turbopackIgnore: true */ this.serverDistDir,
+      MIDDLEWARE_MANIFEST
+    )
 
     // This is just optimization to fire prepare as soon as possible. It will be
     // properly awaited later. We add the catch here to ensure that it does not
@@ -368,6 +378,7 @@ export default class NextNodeServer extends BaseServer<
           isAppPath: false,
           isDev: this.isDev,
           sriEnabled: this.sriEnabled,
+          needsManifestsForLegacyReasons: false,
         })
       } catch (_err) {
         // Intentionally ignored because this is a preload step.
@@ -382,18 +393,12 @@ export default class NextNodeServer extends BaseServer<
           isAppPath: true,
           isDev: this.isDev,
           sriEnabled: this.sriEnabled,
+          needsManifestsForLegacyReasons: false,
         })
         // we need to ensure fetch is patched before we require the page,
         // otherwise if the fetch is patched by user code, we will be patching it
         // too late and there won't be any caching behaviors
         ComponentMod.patchFetch()
-
-        const webpackRequire = ComponentMod.__next_app__.require
-        if (webpackRequire?.m) {
-          for (const id of Object.keys(webpackRequire.m)) {
-            await webpackRequire(id)
-          }
-        }
       } catch (_err) {
         // Intentionally ignored because this is a preload step.
       }
@@ -436,17 +441,20 @@ export default class NextNodeServer extends BaseServer<
   protected loadEnvConfig({
     dev,
     forceReload,
-    silent,
   }: {
     dev: boolean
-    forceReload?: boolean
-    silent?: boolean
+    forceReload: boolean
   }) {
     loadEnvConfig(
       this.dir,
       dev,
-      silent ? { info: () => {}, error: () => {} } : Log,
+      Log,
+      forceReload,
       forceReload
+        ? (envFilePath) => {
+            Log.info(`Reload env: ${envFilePath}`)
+          }
+        : undefined
     )
   }
 
@@ -516,16 +524,21 @@ export default class NextNodeServer extends BaseServer<
   }
 
   protected getPublicDir(): string {
-    return join(this.dir, CLIENT_PUBLIC_FILES_PATH)
+    return join(/* turbopackIgnore: true */ this.dir, CLIENT_PUBLIC_FILES_PATH)
   }
 
   protected getHasStaticDir(): boolean {
-    return fs.existsSync(join(this.dir, 'static'))
+    return fs.existsSync(
+      /* turbopackIgnore: true */ join(
+        /* turbopackIgnore: true */ this.dir,
+        'static'
+      )
+    )
   }
 
   protected getPagesManifest(): PagesManifest | undefined {
     return loadManifest(
-      join(this.serverDistDir, PAGES_MANIFEST)
+      join(/* turbopackIgnore: true */ this.serverDistDir, PAGES_MANIFEST)
     ) as PagesManifest
   }
 
@@ -533,7 +546,7 @@ export default class NextNodeServer extends BaseServer<
     if (!this.enabledDirectories.app) return undefined
 
     return loadManifest(
-      join(this.serverDistDir, APP_PATHS_MANIFEST)
+      join(/* turbopackIgnore: true */ this.serverDistDir, APP_PATHS_MANIFEST)
     ) as PagesManifest
   }
 
@@ -558,9 +571,14 @@ export default class NextNodeServer extends BaseServer<
   }
 
   protected getBuildId(): string {
-    const buildIdFile = join(this.distDir, BUILD_ID_FILE)
+    const buildIdFile = join(
+      /* turbopackIgnore: true */ this.distDir,
+      BUILD_ID_FILE
+    )
     try {
-      return fs.readFileSync(buildIdFile, 'utf8').trim()
+      return fs
+        .readFileSync(/* turbopackIgnore: true */ buildIdFile, 'utf8')
+        .trim()
     } catch (err: any) {
       if (err.code === 'ENOENT') {
         throw new Error(
@@ -693,7 +711,6 @@ export default class NextNodeServer extends BaseServer<
           null,
           renderOpts,
           this.getServerComponentsHmrCache(),
-          false,
           {
             buildId: this.buildId,
           }
@@ -765,7 +782,11 @@ export default class NextNodeServer extends BaseServer<
       const { isAbsolute, href } = paramsResult
 
       const imageUpstream = isAbsolute
-        ? await fetchExternalImage(href)
+        ? await fetchExternalImage(
+            href,
+            this.nextConfig.images.dangerouslyAllowLocalIP,
+            this.nextConfig.images.maximumRedirects
+          )
         : await fetchInternalImage(
             href,
             req.originalRequest,
@@ -878,12 +899,6 @@ export default class NextNodeServer extends BaseServer<
     url?: string
   }): Promise<FindComponentsResult | null> {
     const pagePaths: string[] = [page]
-    if (query.amp) {
-      // try serving a static AMP version first
-      pagePaths.unshift(
-        (isAppPath ? normalizeAppPath(page) : normalizePagePath(page)) + '.amp'
-      )
-    }
 
     if (locale) {
       pagePaths.unshift(
@@ -899,6 +914,7 @@ export default class NextNodeServer extends BaseServer<
           isAppPath,
           isDev: this.isDev,
           sriEnabled: this.sriEnabled,
+          needsManifestsForLegacyReasons: false,
         })
 
         if (
@@ -917,9 +933,7 @@ export default class NextNodeServer extends BaseServer<
           query: {
             ...(!this.renderOpts.isExperimentalCompile &&
             components.getStaticProps
-              ? ({
-                  amp: query.amp,
-                } as NextParsedUrlQuery)
+              ? {}
               : query),
             // For appDir params is excluded.
             ...((isAppPath ? {} : params) || {}),
@@ -938,7 +952,11 @@ export default class NextNodeServer extends BaseServer<
 
   protected getNextFontManifest(): NextFontManifest | undefined {
     return loadManifest(
-      join(this.distDir, 'server', NEXT_FONT_MANIFEST + '.json')
+      join(
+        /* turbopackIgnore: true */ this.distDir,
+        'server',
+        NEXT_FONT_MANIFEST + '.json'
+      )
     ) as NextFontManifest
   }
 
@@ -1257,6 +1275,17 @@ export default class NextNodeServer extends BaseServer<
     return handler
   }
 
+  /**
+   * @internal - this method is internal to Next.js and should not be used directly by end-users
+   */
+  public getRequestHandlerWithMetadata(meta: RequestMeta): NodeRequestHandler {
+    const handler = this.makeRequestHandler()
+    return (req, res, parsedUrl) => {
+      setRequestMeta(req, meta)
+      return handler(req, res, parsedUrl)
+    }
+  }
+
   private makeRequestHandler(): NodeRequestHandler {
     // This is just optimization to fire prepare as soon as possible. It will be
     // properly awaited later. We add the catch here to ensure that it does not
@@ -1502,17 +1531,25 @@ export default class NextNodeServer extends BaseServer<
 
     return {
       name: pageInfo.name,
-      paths: pageInfo.files.map((file) => join(this.distDir, file)),
+      paths: pageInfo.files.map((file) =>
+        join(/* turbopackIgnore: true */ this.distDir, file)
+      ),
       wasm: (pageInfo.wasm ?? []).map((binding) => ({
         ...binding,
-        filePath: join(this.distDir, binding.filePath),
+        filePath: join(
+          /* turbopackIgnore: true */ this.distDir,
+          binding.filePath
+        ),
       })),
       assets:
         pageInfo.assets &&
         pageInfo.assets.map((binding) => {
           return {
             ...binding,
-            filePath: join(this.distDir, binding.filePath),
+            filePath: join(
+              /* turbopackIgnore: true */ this.distDir,
+              binding.filePath
+            ),
           }
         }),
       env: pageInfo.env,
@@ -1524,14 +1561,26 @@ export default class NextNodeServer extends BaseServer<
       try {
         const functionsConfig = this.renderOpts.dev
           ? {}
-          : require(join(this.distDir, 'server', FUNCTIONS_CONFIG_MANIFEST))
+          : require(
+              join(
+                /* turbopackIgnore: true */ this.distDir,
+                'server',
+                FUNCTIONS_CONFIG_MANIFEST
+              )
+            )
 
         if (
           this.renderOpts.dev ||
           functionsConfig?.functions?.['/_middleware']
         ) {
           // if used with top level await, this will be a promise
-          return require(join(this.distDir, 'server', 'middleware.js'))
+          return require(
+            join(
+              /* turbopackIgnore: true */ this.distDir,
+              'server',
+              'middleware.js'
+            )
+          )
         }
       } catch (err) {
         if (
@@ -1603,7 +1652,7 @@ export default class NextNodeServer extends BaseServer<
 
     let url: string
 
-    if (this.nextConfig.skipMiddlewareUrlNormalize) {
+    if (this.nextConfig.skipProxyUrlNormalize) {
       url = getRequestMeta(params.request, 'initURL')!
     } else {
       // For middleware to "fetch" we must always provide an absolute URL
@@ -1868,7 +1917,7 @@ export default class NextNodeServer extends BaseServer<
     }
 
     this._cachedPreviewManifest = loadManifest(
-      join(this.distDir, PRERENDER_MANIFEST)
+      join(/* turbopackIgnore: true */ this.distDir, PRERENDER_MANIFEST)
     ) as PrerenderManifest
 
     return this._cachedPreviewManifest
@@ -1877,7 +1926,10 @@ export default class NextNodeServer extends BaseServer<
   protected getRoutesManifest(): NormalizedRouteManifest | undefined {
     return getTracer().trace(
       NextNodeServerSpan.getRoutesManifest,
-      () => loadManifest(join(this.distDir, ROUTES_MANIFEST)) as RoutesManifest
+      () =>
+        loadManifest(
+          join(/* turbopackIgnore: true */ this.distDir, ROUTES_MANIFEST)
+        ) as RoutesManifest
     )
   }
 
@@ -1904,7 +1956,13 @@ export default class NextNodeServer extends BaseServer<
     addRequestMeta(req, 'initProtocol', protocol)
 
     if (!isUpgradeReq) {
-      addRequestMeta(req, 'clonableBody', getCloneableBody(req.originalRequest))
+      const bodySizeLimit = this.nextConfig.experimental
+        ?.proxyClientMaxBodySize as number | undefined
+      addRequestMeta(
+        req,
+        'clonableBody',
+        getCloneableBody(req.originalRequest, bodySizeLimit)
+      )
     }
   }
 
@@ -2039,7 +2097,10 @@ export default class NextNodeServer extends BaseServer<
     if (this._serverDistDir) {
       return this._serverDistDir
     }
-    const serverDistDir = join(this.distDir, SERVER_DIRECTORY)
+    const serverDistDir = join(
+      /* turbopackIgnore: true */ this.distDir,
+      SERVER_DIRECTORY
+    )
     this._serverDistDir = serverDistDir
     return serverDistDir
   }

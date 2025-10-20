@@ -53,6 +53,10 @@ type NextFlight = Omit<Array<FlightSegment>, 'push'> & {
 declare global {
   // If you're working in a browser environment
   interface Window {
+    /**
+     * request ID, dev-only
+     */
+    __next_r?: string
     __next_f: NextFlight
   }
 }
@@ -154,9 +158,24 @@ const readable = new ReadableStream({
   },
 })
 
+let debugChannel:
+  | { readable?: ReadableStream; writable?: WritableStream }
+  | undefined
+
+if (
+  process.env.NODE_ENV !== 'production' &&
+  process.env.__NEXT_REACT_DEBUG_CHANNEL &&
+  typeof window !== 'undefined'
+) {
+  const { createDebugChannel } =
+    require('./dev/debug-channel') as typeof import('./dev/debug-channel')
+
+  debugChannel = createDebugChannel(undefined)
+}
+
 const initialServerResponse = createFromReadableStream<InitialRSCPayload>(
   readable,
-  { callServer, findSourceMapURL }
+  { callServer, findSourceMapURL, debugChannel }
 )
 
 function ServerRoot({
@@ -241,7 +260,7 @@ export function hydrate(
     const { createWebSocket } =
       require('./dev/hot-reloader/app/web-socket') as typeof import('./dev/hot-reloader/app/web-socket')
 
-    staticIndicatorState = { pathname: null, appIsrManifest: {} }
+    staticIndicatorState = { pathname: null, appIsrManifest: null }
     webSocket = createWebSocket(assetPrefix, staticIndicatorState)
   }
 
@@ -265,11 +284,9 @@ export function hydrate(
                 navigatedAt: initialTimestamp,
                 initialFlightData: initialRSCPayload.f,
                 initialCanonicalUrlParts: initialRSCPayload.c,
+                initialRenderedSearch: initialRSCPayload.q,
                 initialParallelRoutes: new Map(),
                 location: window.location,
-                couldBeIntercepted: initialRSCPayload.i,
-                postponed: initialRSCPayload.s,
-                prerendered: initialRSCPayload.S,
               }),
               instrumentationHooks
             )
