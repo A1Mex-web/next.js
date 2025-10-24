@@ -196,9 +196,17 @@ function getSourcemappedFrameIfPossible(
     }
     sourceMapPayload = maybeSourceMapPayload
     try {
+      // Pass the source map URL as the second parameter so that the consumer
+      // can resolve relative paths in the source map's `sources` array.
+      // This is important for Turbopack-generated source maps which use relative paths.
+      // For most bundlers (Turbopack, Webpack), the source map is in a file with .map extension.
+      // We don't have access to the actual sourceMappingURL from Node's findSourceMap API,
+      // but this heuristic works for standard bundler output.
+      const sourceMapURL = sourceURL + '.map'
       sourceMapConsumer = new SyncSourceMapConsumer(
-        // @ts-expect-error -- Module.SourceMap['version'] is number but SyncSourceMapConsumer wants a string
-        sourceMapPayload
+        sourceMapPayload,
+        /** @ts-expect-error */
+        sourceMapURL
       )
     } catch (cause) {
       // We should not log an actual error instance here because that will re-enter
