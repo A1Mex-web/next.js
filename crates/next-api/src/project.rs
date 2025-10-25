@@ -885,6 +885,13 @@ impl Project {
             endpoints.push(instrumentation.node_js);
             endpoints.push(instrumentation.edge);
         }
+        let pages_shared_endpoints = || {
+            vec![
+                entrypoints.pages_error_endpoint,
+                entrypoints.pages_app_endpoint,
+                entrypoints.pages_document_endpoint,
+            ]
+        };
 
         for (_, route) in entrypoints.routes.iter() {
             match route {
@@ -895,9 +902,7 @@ impl Project {
                     if !app_dir_only {
                         endpoints.push(*html_endpoint);
                         if !is_pages_entries_added {
-                            endpoints.push(entrypoints.pages_error_endpoint);
-                            endpoints.push(entrypoints.pages_app_endpoint);
-                            endpoints.push(entrypoints.pages_document_endpoint);
+                            endpoints.extend(pages_shared_endpoints());
                             is_pages_entries_added = true;
                         }
                         // This only exists in development mode for HMR
@@ -910,9 +915,7 @@ impl Project {
                     if !app_dir_only {
                         endpoints.push(*endpoint);
                         if !is_pages_entries_added {
-                            endpoints.push(entrypoints.pages_error_endpoint);
-                            endpoints.push(entrypoints.pages_app_endpoint);
-                            endpoints.push(entrypoints.pages_document_endpoint);
+                            endpoints.extend(pages_shared_endpoints());
                             is_pages_entries_added = true;
                         }
                     }
@@ -937,6 +940,12 @@ impl Project {
                     tracing::info!("WARN: conflict");
                 }
             }
+        }
+        // In development modes we use `/_error` as the default fallback error page for devtools.
+        // So we always need to make sure that the pages router shared endpoints are included even
+        // if no other pages router routes are.
+        if !is_pages_entries_added && self.next_mode().await?.is_development() {
+            endpoints.extend(pages_shared_endpoints());
         }
 
         Ok(Vc::cell(endpoints))
